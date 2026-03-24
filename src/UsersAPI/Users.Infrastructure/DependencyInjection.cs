@@ -1,5 +1,4 @@
 using System;
-
 using System.Text;
 using MassTransit;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -27,10 +26,36 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<ITokenService, JwtTokenService>();
-        services.AddScoped<IEventBus, MassTransitEventBus>();
+
+        var enableRabbitMq = configuration.GetValue<bool>("Messaging:EnableRabbitMQ", true);
+
+        if (enableRabbitMq)
+        {
+            services.AddScoped<IEventBus, MassTransitEventBus>();
+
+            // Messaging (MassTransit 8.x)
+            services.AddMassTransit(x =>
+            {
+                x.UsingRabbitMq((context, cfg) =>
+                {
+                    var host = configuration["RabbitMQ:Host"] ?? "rabbitmq";
+                    cfg.Host(host, "/", h =>
+                    {
+                        h.Username("guest");
+                        h.Password("guest");
+                    });
+                });
+            });
+        }
+        else
+        {
+            services.AddScoped<IEventBus, NoopEventBus>();
+        }
 
         // JWT
-        var key = configuration["Jwt:Key"] ?? "super-secret-demo-key-change-me";
+        // Use Jwt:Secret consistently (token generation uses Jwt:Secret)
+        var secret = configuration["Jwt:Secret"] ?? configuration["Jwt:Key"] ?? "super-secret-demo-key-change-me";
+
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(opt =>
             {
@@ -42,26 +67,12 @@ public static class DependencyInjection
                     ValidateIssuerSigningKey = true,
                     ValidIssuer = configuration["Jwt:Issuer"] ?? "fcg-fase2",
                     ValidAudience = configuration["Jwt:Audience"] ?? "fcg-fase2",
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret)),
                     ClockSkew = TimeSpan.FromSeconds(30)
                 };
             });
 
         services.AddAuthorization();
-
-        // Messaging (MassTransit 8.x)
-        services.AddMassTransit(x =>
-        {
-            x.UsingRabbitMq((context, cfg) =>
-            {
-                var host = configuration["RabbitMQ:Host"] ?? "rabbitmq";
-                cfg.Host(host, "/", h =>
-                {
-                    h.Username("guest");
-                    h.Password("guest");
-                });
-            });
-        });
 
         return services;
     }
